@@ -59,28 +59,34 @@ const DotsAndBoxes: React.FC = () => {
     const newLines: Line[] = [];
     const newBoxes: Box[] = [];
 
-    // Initialize lines and boxes in a single loop
+    // Initialize boxes
+    for (let row = 0; row < GRID_SIZE; row++) {
+      for (let col = 0; col < GRID_SIZE; col++) {
+        newBoxes.push({ row, col, owner: null });
+      }
+    }
+
+    // Initialize horizontal lines
     for (let row = 0; row <= GRID_SIZE; row++) {
+      for (let col = 0; col < GRID_SIZE; col++) {
+        newLines.push({
+          row,
+          col,
+          isHorizontal: true,
+          player: null
+        });
+      }
+    }
+
+    // Initialize vertical lines
+    for (let row = 0; row < GRID_SIZE; row++) {
       for (let col = 0; col <= GRID_SIZE; col++) {
-        if (row < GRID_SIZE && col < GRID_SIZE) {
-          newBoxes.push({ row, col, owner: null });
-        }
-        if (col < GRID_SIZE) {
-          newLines.push({
-            row: row * 2,
-            col: col * 2 + 1,
-            isHorizontal: true,
-            player: null
-          });
-        }
-        if (row < GRID_SIZE) {
-          newLines.push({
-            row: row * 2 + 1,
-            col: col * 2,
-            isHorizontal: false,
-            player: null
-          });
-        }
+        newLines.push({
+          row,
+          col,
+          isHorizontal: false,
+          player: null
+        });
       }
     }
 
@@ -115,21 +121,23 @@ const DotsAndBoxes: React.FC = () => {
     gameState.boxes.forEach((box) => {
       if (box.owner !== null) return;
 
+      // Find the four lines that make up this box
       const boxLines = {
         top: currentLines.find(
-          (l) => l.row === box.row * 2 && l.col === box.col * 2 + 1 && l.isHorizontal
+          (l) => l.row === box.row && l.col === box.col && l.isHorizontal
         ),
         bottom: currentLines.find(
-          (l) => l.row === (box.row + 1) * 2 && l.col === box.col * 2 + 1 && l.isHorizontal
+          (l) => l.row === box.row + 1 && l.col === box.col && l.isHorizontal
         ),
         left: currentLines.find(
-          (l) => l.row === box.row * 2 + 1 && l.col === box.col * 2 && !l.isHorizontal
+          (l) => l.row === box.row && l.col === box.col && !l.isHorizontal
         ),
         right: currentLines.find(
-          (l) => l.row === box.row * 2 + 1 && l.col === (box.col + 1) * 2 && !l.isHorizontal
+          (l) => l.row === box.row && l.col === box.col + 1 && !l.isHorizontal
         )
       };
 
+      // Check if all four lines are claimed
       if (boxLines.top?.player !== null && 
           boxLines.bottom?.player !== null && 
           boxLines.left?.player !== null && 
@@ -236,8 +244,8 @@ const DotsAndBoxes: React.FC = () => {
       return false;
     }
 
-    // Find the best move that completes the most boxes
-    const bestMove = available.reduce((best, line) => {
+    // First, try to find a move that completes a box
+    for (const line of available) {
       const trialLines = [...current.lines];
       const idx = trialLines.findIndex(l => 
         l.row === line.row && l.col === line.col && l.isHorizontal === line.isHorizontal
@@ -249,53 +257,129 @@ const DotsAndBoxes: React.FC = () => {
         current.boxes.find(bx => bx.row === b.row && bx.col === b.col)?.owner === null
       );
 
-      return newlyClosed.length > best.gain ? { line, gain: newlyClosed.length } : best;
-    }, { line: available[0], gain: -1 });
+      if (newlyClosed.length > 0) {
+        // Found a move that completes a box, take it
+        const newLines = [...current.lines];
+        newLines[idx] = { ...line, player: 1 };
 
-    // Commit the best move
-    const newLines = [...current.lines];
-    const commitIdx = newLines.findIndex(l => 
-      l.row === bestMove.line.row && l.col === bestMove.line.col && l.isHorizontal === bestMove.line.isHorizontal
-    );
-    newLines[commitIdx] = { ...bestMove.line, player: 1 };
+        const newBoxes = [...current.boxes];
+        const newScores = [...current.scores];
+        newlyClosed.forEach(b => {
+          const i = newBoxes.findIndex(bx => bx.row === b.row && bx.col === b.col);
+          newBoxes[i] = { ...b, owner: 1 };
+          newScores[1]++;
+        });
 
-    const closedNow = checkForCompletedBoxes(newLines);
-    const newlyClosed = closedNow.filter(b => 
-      current.boxes.find(bx => bx.row === b.row && bx.col === b.col)?.owner === null
-    );
+        const totalBoxes = GRID_SIZE * GRID_SIZE;
+        const filledBoxes = newScores[0] + newScores[1];
+        const isGameOver = filledBoxes === totalBoxes;
 
-    if (newlyClosed.length === 0) {
-      updateGameState({ 
-        lines: newLines, 
-        currentPlayer: 0, 
-        isComputerThinking: false 
+        updateGameState({
+          lines: newLines,
+          boxes: newBoxes,
+          scores: newScores,
+          currentPlayer: 1,
+          isComputerThinking: !isGameOver,
+          gameOver: isGameOver,
+          showGameOverModal: isGameOver
+        });
+
+        return true;
+      }
+    }
+
+    // If no box-completing moves, find boxes with 2 or fewer lines filled
+    const safeMoves: Line[] = [];
+    for (const line of available) {
+      // Count how many lines are filled around each adjacent box
+      const adjacentBoxes = [];
+      if (line.isHorizontal) {
+        // Check box above
+        if (line.row > 0) {
+          adjacentBoxes.push({ row: line.row - 1, col: line.col });
+        }
+        // Check box below
+        if (line.row < GRID_SIZE) {
+          adjacentBoxes.push({ row: line.row, col: line.col });
+        }
+      } else {
+        // Check box to the left
+        if (line.col > 0) {
+          adjacentBoxes.push({ row: line.row, col: line.col - 1 });
+        }
+        // Check box to the right
+        if (line.col < GRID_SIZE) {
+          adjacentBoxes.push({ row: line.row, col: line.col });
+        }
+      }
+
+      // Count filled lines for each adjacent box
+      let isSafeMove = true;
+      for (const box of adjacentBoxes) {
+        const boxLines = {
+          top: current.lines.find(
+            (l) => l.row === box.row && l.col === box.col && l.isHorizontal
+          ),
+          bottom: current.lines.find(
+            (l) => l.row === box.row + 1 && l.col === box.col && l.isHorizontal
+          ),
+          left: current.lines.find(
+            (l) => l.row === box.row && l.col === box.col && !l.isHorizontal
+          ),
+          right: current.lines.find(
+            (l) => l.row === box.row && l.col === box.col + 1 && !l.isHorizontal
+          )
+        };
+
+        const filledLines = [
+          boxLines.top?.player !== null,
+          boxLines.bottom?.player !== null,
+          boxLines.left?.player !== null,
+          boxLines.right?.player !== null
+        ].filter(Boolean).length;
+
+        if (filledLines >= 2) {
+          isSafeMove = false;
+          break;
+        }
+      }
+
+      if (isSafeMove) {
+        safeMoves.push(line);
+      }
+    }
+
+    // If we found safe moves, pick one randomly
+    if (safeMoves.length > 0) {
+      const randomMove = safeMoves[Math.floor(Math.random() * safeMoves.length)];
+      const newLines = [...current.lines];
+      const idx = newLines.findIndex(l => 
+        l.row === randomMove.row && l.col === randomMove.col && l.isHorizontal === randomMove.isHorizontal
+      );
+      newLines[idx] = { ...randomMove, player: 1 };
+
+      updateGameState({
+        lines: newLines,
+        currentPlayer: 0,
+        isComputerThinking: false
       });
       return false;
     }
 
-    const newBoxes = [...current.boxes];
-    const newScores = [...current.scores];
-    newlyClosed.forEach(b => {
-      const i = newBoxes.findIndex(bx => bx.row === b.row && bx.col === b.col);
-      newBoxes[i] = { ...b, owner: 1 };
-      newScores[1]++;
-    });
-
-    const totalBoxes = GRID_SIZE * GRID_SIZE;
-    const filledBoxes = newScores[0] + newScores[1];
-    const isGameOver = filledBoxes === totalBoxes;
+    // If no safe moves, pick a random available move
+    const randomMove = available[Math.floor(Math.random() * available.length)];
+    const newLines = [...current.lines];
+    const idx = newLines.findIndex(l => 
+      l.row === randomMove.row && l.col === randomMove.col && l.isHorizontal === randomMove.isHorizontal
+    );
+    newLines[idx] = { ...randomMove, player: 1 };
 
     updateGameState({
       lines: newLines,
-      boxes: newBoxes,
-      scores: newScores,
-      currentPlayer: 1, // Keep computer's turn if it completed boxes
-      isComputerThinking: !isGameOver,
-      gameOver: isGameOver,
-      showGameOverModal: isGameOver
+      currentPlayer: 0,
+      isComputerThinking: false
     });
-
-    return true;
+    return false;
   };
 
   return (
@@ -409,23 +493,16 @@ const DotsAndBoxes: React.FC = () => {
                 })}
 
                 {/* Horizontal Lines */}
-                {Array.from({ length: (GRID_SIZE + 1) * GRID_SIZE }).map((_, index) => {
-                  const row = Math.floor(index / GRID_SIZE);
-                  const col = index % GRID_SIZE;
-                  const lineIndex = row * GRID_SIZE + col;
-                  const line = gameState.lines[lineIndex];
-                  
-                  if (!line) return null;
-
+                {gameState.lines.filter(line => line.isHorizontal).map((line, index) => {
                   return (
                     <motion.div
-                      key={`h-line-${row}-${col}`}
+                      key={`h-line-${line.row}-${line.col}`}
                       className={`absolute cursor-pointer ${
                         line.player !== null ? 'opacity-100' : 'opacity-50 hover:opacity-70'
                       }`}
                       style={{
-                        left: `${(col * 100) / GRID_SIZE}%`,
-                        top: `${(row * 100) / GRID_SIZE}%`,
+                        left: `${(line.col * 100) / GRID_SIZE}%`,
+                        top: `${(line.row * 100) / GRID_SIZE}%`,
                         width: `calc(${100 / GRID_SIZE}% - 29px)`,
                         height: '10px',
                         backgroundColor: 'transparent',
@@ -446,23 +523,16 @@ const DotsAndBoxes: React.FC = () => {
                 })}
 
                 {/* Vertical Lines */}
-                {Array.from({ length: GRID_SIZE * (GRID_SIZE + 1) }).map((_, index) => {
-                  const row = Math.floor(index / (GRID_SIZE + 1));
-                  const col = index % (GRID_SIZE + 1);
-                  const lineIndex = (GRID_SIZE + 1) * GRID_SIZE + row * (GRID_SIZE + 1) + col;
-                  const line = gameState.lines[lineIndex];
-
-                  if (!line) return null;
-
+                {gameState.lines.filter(line => !line.isHorizontal).map((line, index) => {
                   return (
                     <motion.div
-                      key={`v-line-${row}-${col}`}
+                      key={`v-line-${line.row}-${line.col}`}
                       className={`absolute cursor-pointer ${
                         line.player !== null ? 'opacity-100' : 'opacity-50 hover:opacity-70'
                       }`}
                       style={{
-                        left: `${(col * 100) / GRID_SIZE}%`,
-                        top: `${(row * 100) / GRID_SIZE}%`,
+                        left: `${(line.col * 100) / GRID_SIZE}%`,
+                        top: `${(line.row * 100) / GRID_SIZE}%`,
                         width: '10px',
                         height: `calc(${100 / GRID_SIZE}% - 29px)`,
                         backgroundColor: 'transparent',
@@ -476,7 +546,7 @@ const DotsAndBoxes: React.FC = () => {
                         style={{
                           width: '8px',
                           backgroundColor: line.player !== null ? PLAYER_COLORS[line.player] : '#eae4af'
-                      }}
+                        }}
                       />
                     </motion.div>
                   );
